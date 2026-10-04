@@ -6,7 +6,7 @@ Three production tricks vs vanilla LangChain usage:
   3. heading_path is prepended to every chunk's text → cheap context enrichment
 """
 from __future__ import annotations
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter, PythonCodeTextSplitter, HTMLHeaderTextSplitter, LatexTextSplitter, RecursiveJsonSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.core.interfaces import BaseChunker
 from src.core.models import Document, DocumentChunk
@@ -39,6 +39,11 @@ class RecursiveChunker(BaseChunker):
         )
         
         chunks: list[DocumentChunk] = []
+        doc_key = getattr(doc, "source_hash", None) or doc.document_id
+        chunk_idx = 0
+
+        #Set unique chunk_id to satisfy indexing idempotence
+
         for block in doc.blocks:
             if block.block_type in self._SKIP_AS_CHUNK:
                 continue
@@ -52,7 +57,13 @@ class RecursiveChunker(BaseChunker):
                     f"[Section: {heading_prefix}]\n{sub_text}"
                     if heading_prefix else sub_text
                 )
+
+                #Set unique chunk_id 
+                chunk_id = f"chk_{self.name}_{doc_key[:12]}_{chunk_idx}"
+                chunk_idx += 1
+
                 chunks.append(DocumentChunk(
+                    chunk_id=chunk_id,
                     document_id=doc.document_id,
                     text=full,
                     source_block_ids=[block.block_id],

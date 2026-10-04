@@ -24,7 +24,7 @@ class VectorRetriever(BaseRetriever):
     def __init__(
         self,
         persist_dir: str | Path = "./chroma_db",
-        collection: str = "voyageai",
+        collection: str = "fintaskit",
         embedding_model: Optional[str] = None,
         embeddings_cache_dir: Optional[Path | str] = None,
     ):

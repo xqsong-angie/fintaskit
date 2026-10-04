@@ -1,37 +1,39 @@
 """
-FastAPI demo server.
+FastAPI service wrapping RAGStack.
 
-Two endpoints + a health check:
+Endpoints:
 
-  POST /ingest    body: {"path": "/abs/path/to.pdf", "max_pages": int?}
-                  returns: {"document_id", "n_blocks", "n_chunks", "cost_usd"}
-  
-  POST /query     body: {"question": "..."}
-                  returns: {"answer", "citations", "stages", "query_type"}
-  
-  GET  /health    returns: {"status": "ok", "n_documents_indexed": int}
+  POST /ingest     body: {"path": "...", "max_pages": int?, "page_range": [int,int]?}
+                   returns: {"document_id", "title", "n_chunks", "cost_usd", "duplicate"}
+  POST /query      body: {"question": "...", "document_ids": [str]?}
+                   returns: {"answer", "citations", "stages", "query_type"}
+  GET  /documents  returns: indexed documents (for a UI document picker)
+  GET  /health     returns: {"status", "n_documents_indexed", ...}
 
-This is a DEMO server for the lab. Production hardening (auth, rate limit,
-request validation, async streaming) is out of scope — see Module 13.
+Assembly lives in app_factory.RAGStack — this module is only the HTTP shell, so
+the notebooks, the Gradio UI and this API all serve the same pipeline config.
 
 Run from repo root:
     uvicorn src.api.server:app --reload --port 8000
+
+Production hardening (auth, rate limiting, async job queue) is out of scope for
+the lab.
 """
 from __future__ import annotations
-from pathlib import Path
-from typing import Optional, Any
+
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from src.api.app_factory import PipelineConfig, RAGStack
+from src.captioners.vlm_captioner import NoOpCaptioner
 from src.core.cache import CacheBundle
-from src.core.config import settings, configure_langsmith
+from src.core.config import configure_langsmith, settings
 from src.observability import CostTracker
-from src.pipelines import IngestionPipeline, QueryPipeline
-from src.chunkers import RecursiveChunker
-from src.retrievers import VectorRetriever, BM25Retriever, HybridRetriever
-from src.generators import RAGGenerator
+from src.pipelines import IngestionPipeline
 
 
 # =============================================================
@@ -48,17 +50,26 @@ class IngestResponse(BaseModel):
     title: str
     n_blocks: int
     n_chunks: int
+    n_chunks_total: int
     cost_usd: float
     cache_hit: bool
+    duplicate: bool
 
 
 class QueryRequest(BaseModel):
     question: str
-    k: int = 5
+    document_ids: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Scope retrieval to these documents. Omit to search the whole "
+            "collection — which is how cross-document leakage happens."
+        ),
+    )
 
 
 class CitationModel(BaseModel):
     chunk_id: str
+    document_id: Optional[str] = None
     text_preview: str
     page_number: Optional[int] = None
     heading_path: list[str] = []
@@ -71,117 +82,116 @@ class QueryResponse(BaseModel):
     query_type: Optional[str] = None
     stages: list[str] = []
     n_chunks_retrieved: int
+    cost_usd: float = 0.0
+
+
+class DocumentModel(BaseModel):
+    document_id: str
+    title: Optional[str] = None
+    n_chunks: int
+    source_hash: Optional[str] = None
 
 
 # =============================================================
-# App state — built lazily so import doesn't require API keys
+# App state
 # =============================================================
-class AppState:
-    def __init__(self):
-        self.cost_tracker = CostTracker()
-        self.cache = CacheBundle.from_root("cache", enabled=True)
-        self.ingestion = IngestionPipeline(
-            cache=self.cache, cost_tracker=self.cost_tracker
-        )
-        # Retrievers + generator are built lazily after first ingest
-        self.vector: Optional[VectorRetriever] = None
-        self.bm25: Optional[BM25Retriever] = None
-        self.hybrid: Optional[HybridRetriever] = None
-        self.generator: Optional[RAGGenerator] = None
-        self.query_pipeline: Optional[QueryPipeline] = None
-        self.indexed_docs: list[str] = []
-    
-    def ensure_retrievers(self):
-        if self.vector is None:
-            self.vector = VectorRetriever(
-                persist_dir="./chroma_db_api",
-                embeddings_cache_dir=self.cache.embeddings_dir,
-            )
-            self.bm25 = BM25Retriever()
-            self.hybrid = HybridRetriever(self.vector, self.bm25)
-            self.generator = RAGGenerator(cost_tracker=self.cost_tracker)
-            self.query_pipeline = QueryPipeline(
-                self.hybrid, self.generator, cost_tracker=self.cost_tracker,
-            )
-
-
-def build_app() -> FastAPI:
+def build_app(
+    config: Optional[PipelineConfig] = None,
+    cache: Optional[CacheBundle] = None,
+    ingestion: Optional[IngestionPipeline] = None,
+) -> FastAPI:
     """Factory pattern — lets tests build an isolated app."""
-    
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         configure_langsmith()
         yield
-    
+
     app = FastAPI(
-        title="VoyageAI RAG Lab API",
-        version="1.0.0",
-        description="Demo RAG service. POST /ingest, then POST /query.",
+        title="Fintech RAG Lab API",
+        version="1.1.0",
+        description="RAG service over financial filings. POST /ingest, then POST /query.",
         lifespan=lifespan,
     )
-    state = AppState()
-    
+
+    tracker = CostTracker()
+    cache = cache or CacheBundle.from_root("cache", enabled=True)
+    ingestion = ingestion or IngestionPipeline(cache=cache, cost_tracker=tracker)
+    config = config or PipelineConfig(persist_dir="./chroma_api", collection="api_stack")
+    stack = RAGStack(config, cache, tracker, ingestion=ingestion)
+    app.state.stack = stack
+
+    # ---- health ----
     @app.get("/health")
     def health():
         return {
             "status": "ok",
-            "n_documents_indexed": len(state.indexed_docs),
+            "n_documents_indexed": stack.status()["n_documents"],
+            "n_chunks": stack.status()["n_chunks"],
             "openai_key_set": settings.has_openai_key,
+            "cost_usd": stack.tracker.total,
+            "config": stack.cfg.to_dict(),
         }
-    
+
+    # ---- documents ----
+    @app.get("/documents", response_model=list[DocumentModel])
+    def documents():
+        return [DocumentModel(**d) for d in stack.documents()]
+
+    # ---- ingest ----
     @app.post("/ingest", response_model=IngestResponse)
     def ingest(req: IngestRequest):
         path = Path(req.path)
         if not path.exists():
             raise HTTPException(404, f"file not found: {path}")
-        
-        state.ensure_retrievers()
-        
-        report = state.ingestion.ingest(
-            path, max_pages=req.max_pages, page_range=req.page_range,
-        )
-        chunks = RecursiveChunker().chunk(report.document)
-        state.hybrid.index(chunks)
-        state.indexed_docs.append(report.document.document_id)
-        
+        try:
+            result = stack.ingest(path, max_pages=req.max_pages, page_range=req.page_range)
+        except Exception as e:
+            raise HTTPException(400, f"ingest failed: {type(e).__name__}: {e}")
         return IngestResponse(
-            document_id=report.document.document_id,
-            title=report.document.title,
-            n_blocks=len(report.document.blocks),
-            n_chunks=len(chunks),
-            cost_usd=report.total_cost_usd,
-            cache_hit=report.parse_cache_hit,
+            document_id=result.document_id,
+            title=result.title,
+            n_blocks=result.n_blocks,
+            n_chunks=result.n_chunks,
+            n_chunks_total=result.n_chunks_total,
+            cost_usd=result.cost_usd,
+            cache_hit=result.cache_hit,
+            duplicate=result.duplicate,
         )
-    
+
+    # ---- query ----
     @app.post("/query", response_model=QueryResponse)
     def query(req: QueryRequest):
-        state.ensure_retrievers()
-        if not state.indexed_docs:
+        if not stack.status()["n_documents"]:
             raise HTTPException(400, "No documents indexed. POST /ingest first.")
-        
-        result = state.query_pipeline.query(req.question)
-        chunk_lookup = {c.chunk_id: c for c in result["chunks"]}
-        citations = [
-            CitationModel(
-                chunk_id=cid,
-                text_preview=chunk_lookup[cid].text[:150] + ("..." if len(chunk_lookup[cid].text) > 150 else ""),
-                page_number=chunk_lookup[cid].page_number,
-                heading_path=chunk_lookup[cid].heading_path,
-            )
-            for cid in result["citations"] if cid in chunk_lookup
-        ]
-        
+        try:
+            result = stack.query(req.question, document_ids=req.document_ids)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"query failed: {type(e).__name__}: {e}")
+
         return QueryResponse(
             answer=result["answer"],
-            citations=citations,
+            citations=[
+                CitationModel(
+                    chunk_id=c["chunk_id"],
+                    document_id=c["document_id"],
+                    text_preview=c["text"][:150] + ("..." if len(c["text"]) > 150 else ""),
+                    page_number=c["page_number"],
+                    heading_path=c["heading_path"],
+                )
+                for c in result["citations"]
+            ],
             refused=result["refused"],
             query_type=result.get("query_type"),
             stages=result.get("stages", []),
             n_chunks_retrieved=len(result["chunks"]),
+            cost_usd=result["cost_usd"],
         )
-    
+
     return app
 
 
 # Module-level app for `uvicorn src.api.server:app`
-app = build_app()
+app = build_app(ingestion=IngestionPipeline(captioner=NoOpCaptioner(), cache=CacheBundle.from_root("cache")))

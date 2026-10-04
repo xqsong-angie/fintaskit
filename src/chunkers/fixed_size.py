@@ -40,7 +40,10 @@ class FixedSizeChunker(BaseChunker):
         chunks: list[DocumentChunk] = []
         step = max(1, self.size - self.overlap)
         
-        for i in range(0, len(tokens), step):
+        #Set unique chunk_id to satisfy indexing idempotence
+        doc_key = getattr(doc, "source_hash", None) or doc.document_id
+
+        for idx, i in enumerate(range(0, len(tokens), step)):
             chunk_tokens = tokens[i : i + self.size]
             if not chunk_tokens:
                 break
@@ -58,7 +61,9 @@ class FixedSizeChunker(BaseChunker):
             # Pick the first overlapping block's page (chunks usually span 1-2 pages)
             page_number = next((pg for _, pg in overlapping if pg is not None), None)
             
+            chunk_id = f"chk_{self.name}_{doc_key[:12]}_{idx}"
             chunks.append(DocumentChunk(
+                chunk_id=chunk_id,
                 document_id=doc.document_id,
                 text=chunk_text,
                 source_block_ids=source_block_ids,

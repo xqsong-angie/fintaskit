@@ -32,10 +32,17 @@ class HybridRetriever(BaseRetriever):
         self.parent_store = parent_store or {}
         self.rrf_k = rrf_k
     
-    def index(self, chunks: list[DocumentChunk]) -> None:
-        """Index into both vector + BM25."""
+    def add_parents(self, new_parents: list[DocumentChunk]) -> None:
+        """add new parents to parent_store"""
+        for p in new_parents:
+            self.parent_store[p.chunk_id] = p
+
+    def index(self, chunks: list[DocumentChunk],parents: Optional[list[DocumentChunk]] = None) -> None:
+        """Increasingly indexing into both vector + BM25 and add parent chunks"""
         self.vector.index(chunks)
         self.bm25.index(chunks)
+        if parents:
+            self.add_parents(parents)
     
     @traceable(name="hybrid_retrieve")
     def retrieve(

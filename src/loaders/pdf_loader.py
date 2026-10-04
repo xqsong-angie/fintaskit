@@ -32,7 +32,9 @@ class PyMuPDFLoader(BaseLoader):
         self,
         extract_images: bool = True,
         extract_tables: bool = True,
-        min_image_pixels: int = 10000,   # filter tiny icons, page-numbers-as-images
+        # 低于此像素数的图片会被丢弃：图标、页码、装饰线。
+        # 财报里的真实插图/图表远大于这个阈值，不会被误删。
+        min_image_pixels: int = 10000,
     ):
         self.extract_images = extract_images
         self.extract_tables = extract_tables
@@ -42,7 +44,7 @@ class PyMuPDFLoader(BaseLoader):
         self,
         source: str | Path,
         max_pages: Optional[int] = None,
-        page_range: Optional[tuple[int, int]] = None,
+        page_range: Optional[tuple[int, int]] = None,  # 1-indexed, inclusive on both ends
     ) -> dict[str, Any]:
         source = Path(source)
         if not source.exists():
@@ -80,13 +82,15 @@ class PyMuPDFLoader(BaseLoader):
             doc.close()
     
     def _load_page(self, doc: "fitz.Document", page_idx: int) -> dict[str, Any]:
+        # 单下划线方法：不会被 `from module import *` 导入，只在本类内部使用
         page = doc[page_idx]
-        
-        # Plain text
+
+        # Plain text. get_text("text") 把整页压成一个纯字符串
         text = page.get_text("text")
-        
-        # Structured blocks with bbox: [(x0, y0, x1, y1, "text", block_no, block_type), ...]
-        # block_type: 0 = text, 1 = image
+
+        # Structured blocks with bbox.
+        # get_text("blocks") 返回 [(x0, y0, x1, y1, "text", block_no, block_type), ...]
+        # b[6] 是 block_type：0 = text，1 = image
         blocks_raw = page.get_text("blocks")
         text_blocks = []
         for b in blocks_raw:

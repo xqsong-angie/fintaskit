@@ -167,6 +167,6 @@ class IngestionPipeline:
     
     def clear_cache(self):
         """Wipe everything in the cache. Use sparingly."""
-        n_docs = self.cache.docs.clear()
-        n_vlm = self.cache.vlm.clear()
+        n_docs = self.cache.docs.clear() #清空文档相关的缓存
+        n_vlm = self.cache.vlm.clear() #清空image caption的缓存
         return {"docs_cleared": n_docs, "vlm_cleared": n_vlm}

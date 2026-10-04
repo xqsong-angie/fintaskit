@@ -46,6 +46,7 @@ from src.observability import CostTracker
 class QueryState(TypedDict, total=False):
     query: str
     query_type: Literal["factual_lookup", "analytical"]
+    document_ids: list[str] | None       # scope retrieval to specific documents
     chunks: list[DocumentChunk]
     answer: str
     citations: list[str]
@@ -85,6 +86,9 @@ class QueryPipeline:
         quick_k: top-k for factual lookups (default 3)
         deep_k: top-k for analytical questions (default 8)
         cost_tracker: shared cost tracker
+        filter_overfetch: multiplier applied to k when document_ids scoping is
+            active (default 3). Filtering happens client-side after retrieval, so
+            we have to ask for more than we need to survive the drop.
     """
     
     def __init__(
@@ -94,12 +98,14 @@ class QueryPipeline:
         quick_k: int = 3,
         deep_k: int = 8,
         cost_tracker: Optional[CostTracker] = None,
+        filter_overfetch: int = 3,
     ):
         self.retriever = retriever
         self.generator = generator
         self.quick_k = quick_k
         self.deep_k = deep_k
         self.cost_tracker = cost_tracker
+        self.filter_overfetch = filter_overfetch
         self.graph = self._build_graph()
     
     # ---- Nodes ----
@@ -111,8 +117,25 @@ class QueryPipeline:
             "stages": [*state.get("stages", []), f"classify→{qt}"],
         }
     
+    def _scoped_retrieve(self, query: str, k: int, document_ids: list[str] | None):
+        """Retrieve k chunks, optionally restricted to specific documents.
+
+        Without this, a retrieval over a multi-document collection leaks: ask a
+        Wells Fargo question and a Tesla chunk can win the ranking (see
+        03_retrieval Step 3). Chroma supports a server-side `where` filter, but
+        BM25 cannot, so the portable path is over-fetch then post-filter —
+        which is why k is multiplied before the drop.
+        """
+        if not document_ids:
+            return self.retriever.retrieve(query, k=k)
+        allowed = set(document_ids)
+        candidates = self.retriever.retrieve(query, k=k * self.filter_overfetch)
+        return [c for c in candidates if c.document_id in allowed][:k]
+    
     def _node_quick_retrieve(self, state: QueryState) -> QueryState:
-        chunks = self.retriever.retrieve(state["query"], k=self.quick_k)
+        chunks = self._scoped_retrieve(
+            state["query"], self.quick_k, state.get("document_ids")
+        )
         return {
             **state,
             "chunks": chunks,
@@ -120,7 +143,9 @@ class QueryPipeline:
         }
     
     def _node_deep_retrieve(self, state: QueryState) -> QueryState:
-        chunks = self.retriever.retrieve(state["query"], k=self.deep_k)
+        chunks = self._scoped_retrieve(
+            state["query"], self.deep_k, state.get("document_ids")
+        )
         return {
             **state,
             "chunks": chunks,
@@ -186,8 +211,12 @@ class QueryPipeline:
     
     # ---- Public API ----
     @traceable(name="query_pipeline")
-    def query(self, question: str) -> dict[str, Any]:
-        initial = QueryState(query=question, stages=[], metadata={})
+    def query(
+        self, question: str, document_ids: Optional[list[str]] = None
+    ) -> dict[str, Any]:
+        initial = QueryState(
+            query=question, stages=[], metadata={}, document_ids=document_ids
+        )
         final = self.graph.invoke(initial)
         return {
             "query": question,
@@ -197,6 +226,7 @@ class QueryPipeline:
             "refused": final.get("refused", False),
             "stages": final.get("stages", []),
             "query_type": final.get("query_type"),
+            "document_ids": document_ids,
         }
     
     def draw_mermaid(self) -> str:

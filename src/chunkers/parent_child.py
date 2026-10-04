@@ -75,34 +75,90 @@ class ParentChildChunker(BaseChunker):
             block_pos.append((cursor, cursor + len(segment), block.page_number))
             cursor += len(segment)
         full_text = "".join(parts)
-        
+        block_pages: list[int | None] = [pg for _, _, pg in block_pos]
+
         def _page_for(chunk_text: str, search_from: int = 0) -> tuple[int | None, int]:
-            """Locate chunk in full_text and return (page_number, end_pos) for next search."""
-            idx = full_text.find(chunk_text, search_from)
+            """Locate chunk in full_text and return (page_number, end_pos) for next search.
+
+            Two things make this harder than a plain `str.find`:
+              1. the splitters strip whitespace, so we search the stripped form;
+              2. consecutive splits overlap, so chunk N+1 *starts before* the end
+                 of chunk N. Searching from `search_from` with the chunk's own
+                 prefix therefore fails for every other chunk. We anchor on the
+                 chunk's tail instead, which is always past the previous cursor,
+                 and back out the true start from where the anchor landed.
+            """
+            needle = chunk_text.strip()
+            idx = full_text.find(needle, search_from)
+
             if idx < 0:
-                return (None, search_from)
-            chunk_end = idx + len(chunk_text)
-            for s, e, pg in block_pos:
-                if s < chunk_end and e > idx and pg is not None:
-                    return (pg, chunk_end)
+                compact = " ".join(needle.split())
+                idx = full_text.find(compact, search_from)
+
+            if idx < 0:
+                for tail in (60, 150, 300):
+                    if len(needle) <= tail:
+                        continue
+                    anchor = needle[-tail:]
+                    pos = full_text.find(anchor, search_from)
+                    if pos != -1:
+                        idx = pos - (len(needle) - tail)
+                        break
+
+            if idx < 0:
+                # Keep making progress, otherwise the search_from scan stalls.
+                return (None, min(len(full_text), search_from + max(1, len(needle) // 2)))
+
+            chunk_end = idx + len(needle)
+
+            # Pages overlapping this span, in document order. An 800-token parent
+            # can straddle a page break, so pick the page covering most of it.
+            pages: list[int | None] = [
+                pg for s, e, pg in block_pos if s < chunk_end and e > idx
+            ]
+            ranked = [pg for pg in pages if pg is not None]
+            if ranked:
+                return (max(set(ranked), key=ranked.count), chunk_end)
+
+            # No page recorded for this span — fall back to the nearest known page.
+            touched = [i for i, (s, e, _) in enumerate(block_pos) if s < chunk_end and e > idx]
+            if touched:
+                nearest = min(touched, key=lambda i: abs(block_pos[i][0] - idx))
+                for j in range(nearest, -1, -1):
+                    if block_pages[j] is not None:
+                        return (block_pages[j], chunk_end)
             return (None, chunk_end)
         
         parents: list[DocumentChunk] = []
         children: list[DocumentChunk] = []
         parent_search_pos = 0
         
-        for parent_text in parent_splitter.split_text(full_text):
+        #Set unique parent_id to satisfy indexing idempotence
+        doc_key = getattr(doc, "source_hash", None) or doc.document_id
+
+        for p_idx, parent_text in enumerate(parent_splitter.split_text(full_text)):
             parent_page, parent_search_pos = _page_for(parent_text, parent_search_pos)
+
+            #Set unique parent_id
+            parent_id = f"chk_{self.name}_p_{doc_key[:12]}_{p_idx}"
+
             parent = DocumentChunk(
+                chunk_id=parent_id,
                 document_id=doc.document_id,
                 text=parent_text,
                 page_number=parent_page,
                 metadata={"chunker": self.name, "level": "parent"},
             )
             parents.append(parent)
-            for child_text in child_splitter.split_text(parent_text):
+
+            for c_idx, child_text in enumerate(child_splitter.split_text(parent_text)):
+
+                #Set unique child_id
+                child_id = f"chk_{self.name}_c_{doc_key[:12]}_{p_idx}_{c_idx}"
+
                 # Children inherit parent's page (close enough — they're contiguous within parent)
                 children.append(DocumentChunk(
+                    chunk_id=child_id,
                     document_id=doc.document_id,
                     text=child_text,
                     parent_chunk_id=parent.chunk_id,

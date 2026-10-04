@@ -81,6 +81,32 @@ If you have a pre-built `cache_bundle.zip`, unzip it at the repo root instead of
 
 ---
 
+## Run it as an app
+
+```bash
+# Gradio UI (chat + citations + live config switching + claim-level verification)
+python notebooks/07_ui_demo.py          # → http://127.0.0.1:7860
+
+# or the HTTP service
+uvicorn src.api.server:app --port 8000  # → http://127.0.0.1:8000/docs
+```
+
+Both sit on `src/api/app_factory.RAGStack`, which assembles chunker → retriever →
+generator from a single `PipelineConfig`. Change `chunk_size`, `parent_size`,
+retriever or model at runtime and the stack rebuilds only the affected part —
+re-chunking reuses the parse and embedding caches, so a config sweep costs
+~$0 in API calls. That is deliberate: **the config you benchmark is the config
+the UI serves.** The same `PipelineConfig` drives `05_evaluation`, so an eval
+result and the deployed behaviour cannot drift apart.
+
+Multi-document scoping is explicit: `/query` accepts `document_ids` and the
+retrieval path filters on `document_id` (`QueryPipeline._scoped_retrieve`).
+Omitting it searches the whole collection — which is exactly how the
+cross-document leakage demonstrated in `03_retrieval` Step 3 happens in
+production.
+
+---
+
 ## Architecture
 
 ```
@@ -120,8 +146,7 @@ fin-rag-lab/
 ├── requirements.txt
 ├── .env.example
 ├── scripts/
-│   ├── precompute_cache.py     # one-shot, generates shareable cache_bundle
-│   └── build_notebooks.py      # rebuilds .ipynb from src
+│   └── precompute_cache.py     # one-shot, generates shareable cache_bundle
 ├── src/
 │   ├── core/                   # domain models, abstract interfaces, cache, config
 │   ├── loaders/                # Stage 1: PDF → page dicts
@@ -135,13 +160,15 @@ fin-rag-lab/
 │   │   ├── ingestion.py        # IngestionPipeline orchestrator
 │   │   └── query.py            # LangGraph state machine
 │   ├── observability/          # CostTracker, LangSmith helpers
-│   └── api/                    # FastAPI demo (POST /ingest, /query)
-├── notebooks/                  # 00–06, see Lab progression above
+│   └── api/
+│       ├── app_factory.py      # RAGStack: config-driven assembly (single source of truth)
+│       └── server.py           # FastAPI shell over RAGStack
+├── notebooks/                  # 00–06 + 07_ui_demo.py, see Lab progression above
 ├── data/
 │   ├── uploads/                # PDFs go here
 │   └── golden_set/             # 30 financial QA across 5 categories
 ├── cache/                      # auto-managed, content-addressed
-└── tests/                      # 57 unit + integration tests
+└── tests/                      # 66 unit + integration tests
 ```
 
 ---
@@ -159,6 +186,28 @@ Cache keys are SHA256 of inputs. Three guarantees:
 1. **Correctness** — change input, change key. No stale data, ever.
 2. **Sharable** — zip the cache, ship to a teammate, instant warm-up on their machine.
 3. **Reproducible** — same inputs → same key on every machine, every time.
+
+Chunk IDs derive from `sha256(source_bytes)[:12]` + a positional index, not
+`uuid4`. Re-ingesting the same PDF therefore produces identical chunk IDs, which
+makes indexing idempotent — the API rejects a duplicate by `source_hash` instead
+of silently doubling the index.
+
+### Scoping is a retrieval parameter, not an afterthought
+A single shared collection is convenient and unsafe: ask a Wells Fargo question
+and a Tesla chunk can win the ranking. `03_retrieval` reproduces the leak live
+and closes it with a metadata filter. Because BM25 runs in-process and cannot do
+server-side `where`, the portable implementation over-fetches (`filter_overfetch`)
+and post-filters on `document_id` — the honest cost of one code path across both
+retrievers.
+
+### Parent chunks need page numbers as much as children do
+`ParentChildChunker` reassembles parents from a flattened document, so the
+`chunk → page` mapping is a `str.find` that has to survive two things: splitter
+whitespace stripping, and the fact that consecutive parents **overlap** — child
+N+1 starts *before* the end of child N. Anchoring the search on the chunk's tail
+rather than its head is what makes every parent resolve to a page instead of
+half of them coming back `None`. A citation with no page number is a citation
+nobody can verify.
 
 ### VLM captioning eagerly at ingestion (not lazily at query)
 Read-side latency is the customer-facing metric. We pay the VLM cost once at ingest (cached forever) so query latency stays p99 < 1s. Lazy VLM at query time would put a 2–3 second LLM call on the hot path.

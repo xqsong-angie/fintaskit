@@ -23,15 +23,22 @@ class BM25Retriever(BaseRetriever):
     
     def __init__(self):
         self.chunks: list[DocumentChunk] = []
+        self._tokenized: list[list[str]] = []
         self._bm25: Optional[BM25Okapi] = None
     
     def index(self, chunks: list[DocumentChunk]) -> None:
-        self.chunks = list(chunks)
+        """Additive. Rebuilds BM25 stats over the full corpus (score order must
+        stay aligned with self.chunks — see search_with_scores)."""
         if not chunks:
-            self._bm25 = None
             return
-        tokenized = [_tokenize(c.text) for c in chunks]
-        self._bm25 = BM25Okapi(tokenized)
+        self.chunks.extend(chunks)
+        self._tokenized.extend(_tokenize(c.text) for c in chunks)
+        self._bm25 = BM25Okapi(self._tokenized)
+
+    def reset(self):
+        self.chunks = []
+        self._tokenized = []
+        self._bm25 = None
     
     @traceable(name="bm25_search")
     def retrieve(self, query: str, k: int = 5) -> list[DocumentChunk]:

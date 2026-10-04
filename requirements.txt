@@ -19,4 +19,5 @@ python-dotenv==1.0.1
 pandas==2.2.3
 fastapi==0.115.5
 uvicorn==0.32.1
+gradio==5.49.1
 pytest==8.3.3
