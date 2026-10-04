@@ -154,8 +154,8 @@ def do_verify(_btn, last):
 
 # ---------------------------------------------------------------------- UI
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="FinRAG Lab") as demo:
-        gr.Markdown("# FinRAG Lab\nHybrid retrieval (vector + BM25 + RRF) over real financial filings.")
+    with gr.Blocks(title="Fintaskit") as demo:
+        gr.Markdown("# Fintaskit\nHybrid retrieval (vector + BM25 + RRF) over real financial filings.")
 
         with gr.Row():
             with gr.Column(scale=1, min_width=280):
