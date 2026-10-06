@@ -226,14 +226,6 @@ Two teaching moments:
 
 ---
 
-## What this lab is NOT
-
-- Not a teach-LangChain-from-scratch course (we use LangChain components but reorganize them around our own abstractions).
-- Not exhaustive coverage of every chunking strategy (we cover 3; semantic chunking and contextual retrieval are discussed conceptually in `02_chunking`).
-- Not a deployment course (`06` shows a FastAPI demo; real cloud deployment is its own project).
-
----
-
 ## Footnotes
 
 **Source PDFs** (download manually):
