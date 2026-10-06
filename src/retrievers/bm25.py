@@ -41,7 +41,11 @@ class BM25Retriever(BaseRetriever):
         self._bm25 = None
     
     @traceable(name="bm25_search")
-    def retrieve(self, query: str, k: int = 5) -> list[DocumentChunk]:
+    def retrieve(
+        self, query: str, k: int = 5, use_parent: bool = False
+    ) -> list[DocumentChunk]:
+        # `use_parent` is part of the BaseRetriever contract; BM25 has no
+        # parent/child hierarchy, so it is accepted and ignored.
         if self._bm25 is None or not self.chunks:
             return []
         scored = self.search_with_scores(query, k=k)

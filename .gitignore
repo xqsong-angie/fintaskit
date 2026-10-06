@@ -7,7 +7,10 @@ __pycache__/
 chroma_db*/
 tmp_chroma_*/
 tmp_*.csv
+tmp_*.md
 *.egg-info/
+# Chroma writes a uuid dir per collection; none of it belongs in git
+chroma_ui/*/
 
 # Env / secrets
 .env

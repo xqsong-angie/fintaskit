@@ -98,10 +98,18 @@ class BaseChunker(Runnable[Document, list[DocumentChunk]], ABC):
 # Stage 5: Retriever — query → relevant Chunks
 # =============================================================
 class BaseRetriever(Runnable[str, list[DocumentChunk]], ABC):
-    """Retrieves Chunks given a natural-language query."""
-    
+    """Retrieves Chunks given a natural-language query.
+
+    `use_parent` is part of the contract on every implementation, not just the
+    hybrid one, so a single call path works for all retrievers (the eval harness
+    sweeps bm25/vector/hybrid through the same code). Retrievers with no
+    parent/child hierarchy accept it and ignore it.
+    """
+
     @abstractmethod
-    def retrieve(self, query: str, k: int = 5) -> list[DocumentChunk]:
+    def retrieve(
+        self, query: str, k: int = 5, use_parent: bool = False
+    ) -> list[DocumentChunk]:
         ...
     
     @abstractmethod

@@ -33,6 +33,9 @@ python scripts/precompute_cache.py \
     --inputs data/uploads/wells_fargo.pdf \
              data/uploads/tesla.pdf \
              data/uploads/amd.pdf
+
+# 5. Open the first notebook
+jupyter lab notebooks/00_quickstart.ipynb
 ```
 
 If you have a pre-built `cache_bundle.zip`, unzip it at the repo root instead of step 4 — the cache is content-addressed, so a teammate's bundle works on your machine bit-for-bit.
@@ -50,6 +53,76 @@ If you have a pre-built `cache_bundle.zip`, unzip it at the repo root instead of
 | 04 | `generation` | LangGraph state machine: short-query bypass, retrieve-generate, refusal-on-empty |
 | 05 | `evaluation` | Ragas 4-metric eval + custom claim-level `HallucinationDetector` for compliance |
 | 06 | `observability` | `@traceable` instrumentation + LangSmith dashboard + FastAPI `/ingest` and `/query` endpoints |
+
+---
+
+## Component evaluation
+
+Ragas (notebook 05) answers "is the final answer good?". That is too late to
+localise a regression, and it costs money per run. This harness answers "which
+component is at fault?" by swapping one factor at a time (OFAT) over a labelled
+golden set and scoring **retrieval against pages**, so the numbers are
+deterministic and need no API key.
+
+```bash
+# 0. audit the golden set before trusting any metric
+python scripts/make_label_pack.py qa --paraphrase
+
+# 1. build a candidate-page paste pack per document (for hand labelling)
+python scripts/make_label_pack.py pack --doc tesla
+
+# 2. retrieval axes only — no LLM, no spend, safe for CI
+python scripts/run_component_eval.py --axes loader,chunker,retriever --k 5
+
+# 3. one axis at a time while debugging
+python scripts/run_component_eval.py --axes chunker --k 5
+python scripts/run_component_eval.py --axes retriever --k 5 --show-misses
+
+# 4. everything, plus markdown for the PR
+python scripts/run_component_eval.py --axes all --k 5 -o tmp_eval --markdown
+
+# 5. generator axis — costs money, keeps the answer-level metrics
+python scripts/run_component_eval.py --axes generator \
+    --generator-configs gpt-5-mini -o tmp_eval
+```
+
+Pass a **fresh `--persist-dir` per run**. The Chroma collection is not cleared
+between configs, so reusing a directory that a previous `use_vlm=True/False` flip
+populated leaves stale vectors behind and moves `page_recall` by ~0.02:
+
+```bash
+python scripts/run_component_eval.py --axes all --persist-dir tmp_chroma_run1
+```
+
+### What each axis isolates
+
+| Axis | Swapped | Question it answers |
+|---|---|---|
+| `loader` | `use_vlm=True/False` | did captioning help or just add tokens? |
+| `chunker` | `fixed_size` / `recursive` / `parent_child` | which split keeps the evidence retrievable? |
+| `retriever` | `bm25` / `vector` / `hybrid` | does RRF beat either leg alone? |
+| parent | `use_parent=False/True` | does small-to-big expansion pay for its lost precision? |
+| `generator` | model | does it cite the right page, and refuse out-of-corpus? |
+
+### Metrics, and one detail that matters
+
+`page_recall` and `page_precision` are computed from the **full set of pages a
+chunk covers**, resolved through `chunk.source_block_ids`
+(`src/core/page_map.py`), not from the chunk's single `page_number`. A
+`fixed_size` chunk straddling pages 21–22 counts for both; with one page per
+chunk, page 22 is scored as a miss and recall is understated by construction.
+
+Recall alone is also misleading here: large chunks trivially cover more gold
+pages, so `parent:expand=True` posts the *highest* recall and the *lowest*
+precision of any config (0.699 / 0.180). That trade-off is the finding, not a
+bug — which is why both are always printed together.
+
+The generator axis reports `citation_page_recall` / `citation_page_precision`
+separately from retrieval, and **excludes** rows where the model emitted no
+parseable citation (`citation_mode="fallback_all_sources"`, where
+`RAGGenerator` attributes every retrieved chunk). Including those rows would
+silently turn citation recall into a copy of retrieval recall; they are counted
+in `citation_fallback_rows` instead.
 
 ---
 
@@ -144,6 +217,20 @@ fin-rag-lab/
 | Tesla Q1 2026 | 31 | 530 | 11 | 10 | 95s | $0.0061 |
 | AMD Q4 2025 | 34 | 482 | 21 | 61 | 112s | $0.0187 |
 | **Total** | 77 | 1,430 | 32 | 72 | ~3.5 min | **$0.025** |
+
+Two teaching moments:
+
+1. **Wells Fargo: 0 tables detected.** PyMuPDF's `find_tables()` cannot recover tables that are laid out as positioned text without an underlying table structure — common for press-release-style PDFs. The financial data *is* there, but fragmented across 418 text blocks. This is exactly the failure mode `02_chunking.ipynb` opens with: a generic `CoverageDiagnostic` tool reveals fixed-size chunking can't retrieve the table content even when asked direct questions. We don't hard-code "WF misses tables" anywhere — the tool measures it.
+
+2. **AMD: 36 cache hits within itself** (out of 104 lookups). AMD's slide deck reuses the same logo / page-header / footer images across pages. Content-addressed caching deduplicates them automatically — proof the cache key design works without writing a test.
+
+---
+
+## What this lab is NOT
+
+- Not a teach-LangChain-from-scratch course (we use LangChain components but reorganize them around our own abstractions).
+- Not exhaustive coverage of every chunking strategy (we cover 3; semantic chunking and contextual retrieval are discussed conceptually in `02_chunking`).
+- Not a deployment course (`06` shows a FastAPI demo; real cloud deployment is its own project).
 
 ---
 

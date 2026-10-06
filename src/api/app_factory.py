@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.chunkers import FixedSizeChunker, ParentChildChunker, RecursiveChunker
+from src.captioners.vlm_captioner import NoOpCaptioner
 from src.core.cache import CacheBundle
 from src.core.models import Document, DocumentChunk
 from src.generators import RAGGenerator
@@ -35,6 +36,11 @@ class PipelineConfig:
     retriever: str = "hybrid"
     chunker: str = "recursive"
     use_parent: bool = False
+    # Loader axis: caption tables/images with the VLM, or index them raw.
+    # `block.get_embed_text()` returns semantic_content when present and raw text
+    # otherwise, so this flag changes what the chunkers actually slice — it is
+    # part of the index fingerprint, not a query-time knob.
+    use_vlm: bool = True
 
     chunk_size: int = 400
     chunk_overlap: int = 60
@@ -62,8 +68,17 @@ class PipelineConfig:
         return self
 
     def fingerprint(self) -> str:
-        """Identity of the *index*. Changing anything here invalidates chunks."""
-        return f"{self.chunker}|{self.chunk_size}|{self.chunk_overlap}|{self.parent_size}|{self.child_size}"
+        """Identity of the *index*. Changing anything here invalidates chunks.
+
+        use_vlm belongs in here because captions change chunk text:
+        `get_embed_text()` prefers semantic_content over raw text, so flipping
+        it produces a different corpus from the same PDF.
+        """
+        caption = "vlm" if self.use_vlm else "raw"
+        return (
+            f"{self.chunker}|{caption}|{self.chunk_size}|{self.chunk_overlap}"
+            f"|{self.parent_size}|{self.child_size}"
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -100,19 +115,40 @@ class RAGStack:
         self.cfg = cfg.validate()
         self.cache = cache
         self.tracker = tracker
-        self.ingestion = ingestion or IngestionPipeline(cache=cache, cost_tracker=tracker)
+
+        # One IngestionPipeline per caption mode. Both share this stack's
+        # CacheBundle and CostTracker; DocumentCache.make_key includes
+        # captioner_model, so the two modes cache independently instead of one
+        # overwriting the other.
+        self._ingest_pool: dict[bool, IngestionPipeline] = {}
+        if ingestion is not None:
+            self._ingest_pool[self.cfg.use_vlm] = ingestion
+        self.ingestion = self._ingestion_for(self.cfg.use_vlm)
 
         # ---- index state (survives retriever/model changes) ----
         self._docs: dict[str, Document] = {}          # source_hash -> parsed Document
         self._chunks: list[DocumentChunk] = []
         self._parents: dict[str, DocumentChunk] = {}
         self._by_hash: dict[str, str] = {}          # source_hash -> document_id
+        # Replayable record of every ingest() call. Needed because switching
+        # caption mode has to re-run ingestion to get a differently-parsed
+        # Document — the raw Document is not recoverable from the captioned one.
+        self._sources: list[tuple[str, dict]] = []
         self._indexed_fingerprint: Optional[str] = None
 
         self._build_backends()
         self._build_query_side()
 
     # ------------------------------------------------------------------ setup
+    def _ingestion_for(self, use_vlm: bool) -> IngestionPipeline:
+        """The IngestionPipeline for a caption mode, created on first use."""
+        if use_vlm not in self._ingest_pool:
+            self._ingest_pool[use_vlm] = IngestionPipeline(
+                captioner=None if use_vlm else NoOpCaptioner(),
+                cache=self.cache,
+                cost_tracker=self.tracker,
+            )
+        return self._ingest_pool[use_vlm]
     def _build_backends(self):
         """Vector + BM25 always exist; the retriever picks which one answers."""
         self.vector = VectorRetriever(
@@ -121,7 +157,14 @@ class RAGStack:
             embeddings_cache_dir=self.cache.embeddings_dir,
         )
         self.bm25 = BM25Retriever()
-        self.hybrid = HybridRetriever(self.vector, self.bm25, parent_store=self._parents)
+        self.hybrid = HybridRetriever(
+            self.vector,
+            self.bm25,
+            # Callable, not the dict: _build_backends runs before the chunking
+            # that fills _parents, so capturing the dict by value would leave
+            # parent expansion silently disabled after any reconfigure().
+            parent_store=lambda: self._parents,
+        )
 
     def _build_query_side(self):
         """Retriever + generator + LangGraph pipeline. Cheap; rebuilt on change."""
@@ -139,6 +182,7 @@ class RAGStack:
             quick_k=self.cfg.quick_k,
             deep_k=self.cfg.deep_k,
             cost_tracker=self.tracker,
+            use_parent=self.cfg.use_parent,
         )
 
     # ----------------------------------------------------------------- ingest
@@ -170,19 +214,33 @@ class RAGStack:
                 duplicate=True,
             )
 
+        self._sources.append((str(source), dict(kwargs)))
+        n_chunks = self._register(doc)
+        self._reindex()
+
+        return IngestResult(
+            document_id=doc.document_id, title=doc.title, source_hash=doc_hash,
+            n_blocks=len(doc.blocks), n_chunks=n_chunks,
+            n_chunks_total=len(self._chunks), cost_usd=report.total_cost_usd,
+            cache_hit=report.parse_cache_hit,
+        )
+
+    def _register(self, doc: Document) -> int:
+        """Chunk one already-parsed Document and add it to the pending index.
+
+        Returns the number of chunks added (0 if the source_hash is already
+        registered). Split out of ingest() because _rechunk_all() needs the same
+        logic — but must not re-append to _sources, which is the replay log.
+        """
+        doc_hash = doc.source_hash or doc.document_id
+        if doc_hash in self._by_hash:
+            return 0
         chunks, parents = self._chunk_document(doc)
         self._docs[doc_hash] = doc
         self._chunks.extend(chunks)
         self._parents.update({p.chunk_id: p for p in parents})
         self._by_hash[doc_hash] = doc.document_id
-        self._reindex()
-
-        return IngestResult(
-            document_id=doc.document_id, title=doc.title, source_hash=doc_hash,
-            n_blocks=len(doc.blocks), n_chunks=len(chunks),
-            n_chunks_total=len(self._chunks), cost_usd=report.total_cost_usd,
-            cache_hit=report.parse_cache_hit,
-        )
+        return len(chunks)
 
     def _reindex(self):
         """Full rebuild from self._chunks.
@@ -199,17 +257,23 @@ class RAGStack:
         self._indexed_fingerprint = self.cfg.fingerprint()
 
     def _rechunk_all(self):
-        """Rebuild every chunk from the parsed Documents we kept in memory.
+        """Rebuild every chunk from the Documents behind the recorded ingests.
 
-        No re-parsing and no re-captioning: only the splitter runs. Embeddings
-        hit cache.embeddings_dir, so a chunk_size sweep costs ~0 API calls.
+        Replays every ingest() call through `self.ingestion` — which is the
+        pipeline for the *current* caption mode. Two cases:
+
+          - only the splitter changed: DocumentCache returns the same Document
+            in ~10 ms, so nothing is re-parsed and nothing is re-captioned;
+          - use_vlm changed: the cache key includes captioner_model, so this
+            really does re-parse (and re-caption, or deliberately not). The raw
+            Document cannot be recovered from the captioned one, so replaying is
+            the only correct way to get the other arm of the loader ablation.
+
+        Embeddings hit cache.embeddings_dir either way.
         """
         self._chunks, self._parents, self._by_hash = [], {}, {}
-        for doc_hash, doc in self._docs.items():
-            chunks, parents = self._chunk_document(doc)
-            self._chunks.extend(chunks)
-            self._parents.update({p.chunk_id: p for p in parents})
-            self._by_hash[doc_hash] = doc.document_id
+        for source, kwargs in self._sources:
+            self._register(self.ingestion.ingest(source, **kwargs).document)
         self._reindex()
 
     def reconfigure(self, **overrides) -> "RAGStack":
@@ -220,8 +284,10 @@ class RAGStack:
         stack.cfg = new_cfg
         stack.cache = self.cache
         stack.tracker = self.tracker
-        stack.ingestion = self.ingestion
+        stack._ingest_pool = self._ingest_pool
+        stack.ingestion = stack._ingestion_for(new_cfg.use_vlm)
         stack._docs = self._docs
+        stack._sources = self._sources
         stack._chunks, stack._parents, stack._by_hash = [], {}, {}
         stack._indexed_fingerprint = None
         stack._build_backends()

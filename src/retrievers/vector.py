@@ -6,6 +6,7 @@ with LangChain's CacheBackedEmbeddings. Re-running with the same chunks
 returns instantly + costs $0.
 """
 from __future__ import annotations
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,27 @@ from src.core.interfaces import BaseRetriever
 from src.core.models import DocumentChunk
 from src.core.config import settings
 from src.core.cache import make_cached_embeddings
+
+
+def _load_json_list(raw: object) -> list[str]:
+    """Chroma metadata values come back as scalars; recover the list we stored."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return []
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def _load_json_dict(raw: object) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 class VectorRetriever(BaseRetriever):
@@ -64,6 +86,14 @@ class VectorRetriever(BaseRetriever):
                     "parent_chunk_id": c.parent_chunk_id or "",
                     "heading_path": " > ".join(c.heading_path),
                     "page_number": c.page_number or 0,
+                    # source_block_ids and metadata are pydantic fields, not
+                    # Chroma metadata, so without this they are lost on the
+                    # round-trip. That silently degrades page attribution to the
+                    # single lossy page_number and makes parent/child chunks
+                    # indistinguishable. Chroma metadata must be scalars, so
+                    # both are stored JSON-encoded.
+                    "source_block_ids": json.dumps(c.source_block_ids),
+                    "chunk_meta": json.dumps(c.metadata),
                 },
             )
             for c in chunks
@@ -72,7 +102,11 @@ class VectorRetriever(BaseRetriever):
         self.store.add_documents(lc_docs, ids=ids)
     
     @traceable(name="vector_search")
-    def retrieve(self, query: str, k: int = 5) -> list[DocumentChunk]:
+    def retrieve(
+        self, query: str, k: int = 5, use_parent: bool = False
+    ) -> list[DocumentChunk]:
+        # `use_parent` is part of the BaseRetriever contract; the vector store
+        # holds children only, so it is accepted and ignored.
         results = self.store.similarity_search_with_score(query, k=k)
         return [self._lc_to_chunk(doc) for doc, _ in results]
     
@@ -103,4 +137,6 @@ class VectorRetriever(BaseRetriever):
             parent_chunk_id=m.get("parent_chunk_id") or None,
             heading_path=heading_str.split(" > ") if heading_str else [],
             page_number=m.get("page_number") or None,
+            source_block_ids=_load_json_list(m.get("source_block_ids")),
+            metadata=_load_json_dict(m.get("chunk_meta")),
         )

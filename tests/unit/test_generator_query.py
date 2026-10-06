@@ -116,10 +116,12 @@ class FakeRetriever(BaseRetriever):
     def __init__(self, chunks_to_return: list[DocumentChunk]):
         self.chunks_to_return = chunks_to_return
         self.last_k = None
+        self.last_use_parent = None
     def index(self, chunks):
         pass
-    def retrieve(self, query: str, k: int = 5):
+    def retrieve(self, query: str, k: int = 5, use_parent: bool = False):
         self.last_k = k
+        self.last_use_parent = use_parent
         return self.chunks_to_return[:k]
 
 
@@ -184,3 +186,34 @@ def test_query_pipeline_draws_mermaid():
     diagram = pipeline.draw_mermaid()
     assert isinstance(diagram, str)
     assert len(diagram) > 0
+
+
+# =============================================================
+# use_parent forwarding — regression for a dead config knob
+# =============================================================
+def test_query_pipeline_defaults_use_parent_off():
+    """Parent expansion must be opt-in, not something you get by default."""
+    retriever = FakeRetriever(make_chunks(3))
+    pipeline = QueryPipeline(retriever, FakeGenerator({"answer": "a", "citations": []}))
+    pipeline.query("What is the net income?")
+    assert retriever.last_use_parent is False
+
+
+def test_query_pipeline_forwards_use_parent_on():
+    retriever = FakeRetriever(make_chunks(3))
+    pipeline = QueryPipeline(
+        retriever, FakeGenerator({"answer": "a", "citations": []}), use_parent=True,
+    )
+    pipeline.query("What is the net income?")
+    assert retriever.last_use_parent is True
+
+
+def test_query_pipeline_forwards_use_parent_when_scoped():
+    """The document_ids branch over-fetches, so it must forward the flag too."""
+    retriever = FakeRetriever(make_chunks(9))
+    pipeline = QueryPipeline(
+        retriever, FakeGenerator({"answer": "a", "citations": []}), use_parent=True,
+    )
+    pipeline.query("What is the net income?", document_ids=["doc_test"])
+    assert retriever.last_use_parent is True
+    assert retriever.last_k == 9, "scoped path over-fetches before filtering"

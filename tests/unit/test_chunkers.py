@@ -41,6 +41,26 @@ def make_doc():
     )
 
 
+def make_paged_doc():
+    """Two pages of prose, so parents can straddle a page break."""
+    return Document(
+        title="Paged Doc",
+        source_type="md",
+        blocks=[
+            DocumentBlock(
+                block_type="paragraph", page_number=1,
+                text="Page one revenue discussion. " * 40,
+                heading_path=["Results"],
+            ),
+            DocumentBlock(
+                block_type="paragraph", page_number=2,
+                text="Page two margin discussion. " * 40,
+                heading_path=["Results"],
+            ),
+        ],
+    )
+
+
 # ===== FixedSizeChunker =====
 def test_fixed_returns_chunks():
     doc = make_doc()
@@ -138,3 +158,55 @@ def test_all_chunkers_attach_document_id():
         chunks = chunker.chunk(doc)
         for c in chunks:
             assert c.document_id == doc.document_id
+
+
+def test_parent_child_parents_and_children_carry_source_block_ids():
+    """Without these, a parent_child chunk can only be attributed to the single
+    lossy page_number and citations cannot be traced back to blocks."""
+    doc = make_paged_doc()
+    parents, children = ParentChildChunker(
+        parent_size=400, child_size=100
+    ).chunk_with_parents(doc)
+    assert parents and children
+    for c in parents + children:
+        assert c.source_block_ids, f"{c.metadata['level']} has no block ids"
+        assert set(c.source_block_ids) <= {b.block_id for b in doc.blocks}
+
+
+def test_parent_child_children_report_their_own_page_not_the_parents():
+    """Children used to inherit the parent's *first* page, which is wrong for
+    every child after the page break and silently corrupts page-level metrics.
+
+    parent_size is deliberately larger than the document so there is exactly one
+    parent straddling the break -- otherwise no parent has children on two pages
+    and the test would pass without exercising the bug.
+    """
+    doc = make_paged_doc()
+    parents, children = ParentChildChunker(
+        parent_size=1000, child_size=100
+    ).chunk_with_parents(doc)
+    assert len(parents) == 1, "fixture must produce a single straddling parent"
+    parent_first_page = {p.chunk_id: p.page_number for p in parents}
+    assert {c.page_number for c in children} == {1, 2}, \
+        "expected children spanning both pages"
+    assert any(
+        c.page_number != parent_first_page[c.parent_chunk_id] for c in children
+    ), "no child diverged from its parent page; test is not exercising the fix"
+
+
+def test_all_chunkers_resolve_to_a_page_set_via_page_map():
+    from src.core.page_map import build_block_index, chunk_pages
+
+    doc = make_paged_doc()
+    index = build_block_index(doc)
+    for chunker in [
+        FixedSizeChunker(size=200),
+        RecursiveChunker(chunk_size=200),
+    ]:
+        for c in chunker.chunk(doc):
+            assert chunk_pages(c, index), f"{chunker.name} chunk unattributable"
+    parents, children = ParentChildChunker(
+        parent_size=400, child_size=100
+    ).chunk_with_parents(doc)
+    for c in parents + children:
+        assert chunk_pages(c, index)

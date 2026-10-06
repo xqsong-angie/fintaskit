@@ -8,6 +8,7 @@ This is what production RAG looks like in 2026:
   4. Return top-k
 """
 from __future__ import annotations
+from collections.abc import Callable, Mapping
 from typing import Optional
 
 from langsmith import traceable
@@ -24,13 +25,32 @@ class HybridRetriever(BaseRetriever):
         self,
         vector,                         # VectorRetriever
         bm25,                           # BM25Retriever
-        parent_store: Optional[dict[str, DocumentChunk]] = None,
+        parent_store: Mapping[str, DocumentChunk]
+        | Callable[[], Mapping[str, DocumentChunk]] | None = None,
         rrf_k: int = 60,
     ):
+        """
+        `parent_store` maps parent chunk_id -> parent chunk. It may be a callable,
+        and callers that own the store (RAGStack) should pass one: they must
+        build the retriever before the chunking that fills the store exists, so a
+        dict captured by value would still be empty at query time and parent
+        expansion would silently no-op.
+        """
         self.vector = vector
         self.bm25 = bm25
-        self.parent_store = parent_store or {}
+        self._parent_store = parent_store
         self.rrf_k = rrf_k
+
+    @property
+    def parent_store(self) -> Mapping[str, DocumentChunk]:
+        store = self._parent_store
+        if callable(store):
+            store = store()
+        return store if store is not None else {}
+
+    @parent_store.setter
+    def parent_store(self, value) -> None:
+        self._parent_store = value
     
     def add_parents(self, new_parents: list[DocumentChunk]) -> None:
         """add new parents to parent_store"""
@@ -50,8 +70,14 @@ class HybridRetriever(BaseRetriever):
         query: str,
         k: int = 5,
         fetch_k: int = 20,
-        use_parent: bool = True,
+        use_parent: bool = False,
     ) -> list[DocumentChunk]:
+        """`use_parent=True` swaps each retrieved child for its parent.
+
+        Defaults to False so that "no parent expansion" is the behaviour you get
+        without asking for it. The caller (QueryPipeline) always passes this
+        explicitly, from PipelineConfig.use_parent.
+        """
         vec_scored = self.vector.search_with_scores(query, k=fetch_k)
         bm25_scored = self.bm25.search_with_scores(query, k=fetch_k)
         

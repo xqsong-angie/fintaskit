@@ -89,6 +89,9 @@ class QueryPipeline:
         filter_overfetch: multiplier applied to k when document_ids scoping is
             active (default 3). Filtering happens client-side after retrieval, so
             we have to ask for more than we need to survive the drop.
+        use_parent: swap retrieved children for their parents (small-to-big).
+            Forwarded to the retriever on every call. Ignored by retrievers
+            without a parent/child hierarchy.
     """
     
     def __init__(
@@ -99,6 +102,7 @@ class QueryPipeline:
         deep_k: int = 8,
         cost_tracker: Optional[CostTracker] = None,
         filter_overfetch: int = 3,
+        use_parent: bool = False,
     ):
         self.retriever = retriever
         self.generator = generator
@@ -106,6 +110,7 @@ class QueryPipeline:
         self.deep_k = deep_k
         self.cost_tracker = cost_tracker
         self.filter_overfetch = filter_overfetch
+        self.use_parent = use_parent
         self.graph = self._build_graph()
     
     # ---- Nodes ----
@@ -125,11 +130,17 @@ class QueryPipeline:
         03_retrieval Step 3). Chroma supports a server-side `where` filter, but
         BM25 cannot, so the portable path is over-fetch then post-filter —
         which is why k is multiplied before the drop.
+
+        `use_parent` is forwarded on both paths. Without it the parent/child
+        toggle never reaches the retriever, so PipelineConfig.use_parent would
+        be a dead knob and the small-to-big ablation would be unrunnable.
         """
         if not document_ids:
-            return self.retriever.retrieve(query, k=k)
+            return self.retriever.retrieve(query, k=k, use_parent=self.use_parent)
         allowed = set(document_ids)
-        candidates = self.retriever.retrieve(query, k=k * self.filter_overfetch)
+        candidates = self.retriever.retrieve(
+            query, k=k * self.filter_overfetch, use_parent=self.use_parent
+        )
         return [c for c in candidates if c.document_id in allowed][:k]
     
     def _node_quick_retrieve(self, state: QueryState) -> QueryState:
