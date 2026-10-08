@@ -67,7 +67,7 @@ deterministic and need no API key.
 ```bash
 # 0. audit the golden set before trusting any metric
 python scripts/make_label_pack.py qa --paraphrase
-fix golden set:
+# fix golden set:
 python scripts/make_label_pack.py pack
 
 # 1. build a candidate-page paste pack per document (for hand labelling)
