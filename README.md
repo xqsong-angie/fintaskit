@@ -81,7 +81,7 @@ python scripts/run_component_eval.py --axes chunker --k 5
 python scripts/run_component_eval.py --axes retriever --k 5 --show-misses
 
 # 4. everything, plus markdown for the PR
-python scripts/run_component_eval.py --axes all --k 5 -o tmp_eval --markdown
+python scripts/run_component_eval.py --axes all --k 5 -o tmp_eval --markdown --persist-dir tmp_chroma_all
 
 # 5. generator axis — costs money, keeps the answer-level metrics
 python scripts/run_component_eval.py --axes generator \
