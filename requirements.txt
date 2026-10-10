@@ -20,6 +20,8 @@ pandas==2.2.3
 fastapi==0.115.5
 uvicorn==0.32.1
 pytest==8.3.3
-
 sentence-transformers==6.1.0
 httpx==0.28.1
+pyarrow==17.0.0
+transformers==5.19.0
+huggingface_hub==1.33.0
