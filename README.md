@@ -34,10 +34,6 @@ python scripts/precompute_cache.py \
              data/uploads/tesla.pdf \
              data/uploads/amd.pdf
 
-# 5. Open the first notebook
-jupyter lab notebooks/00_quickstart.ipynb
-```
-
 If you have a pre-built `cache_bundle.zip`, unzip it at the repo root instead of step 4 — the cache is content-addressed, so a teammate's bundle works on your machine bit-for-bit.
 
 ---

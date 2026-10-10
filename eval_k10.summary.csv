@@ -1,0 +1,4 @@
+config,chunker,retriever,use_vlm,use_parent,k,n_chunks,n_parents,avg_pages_per_chunk,page_recall,page_recall@10,page_precision,any_hit,full_hit,doc_hit,doc_coverage,unattributed_chunks,cov_pct_dense,cov_numeric_density,cov_unique_pages
+baseline,parent_child,hybrid,True,False,10,577,85,1.1,0.8205,0.8205,0.2212,0.9615,0.6923,0.8462,0.7917,0,0.2269,0.1244,6.6923
+retriever:bm25,parent_child,bm25,True,False,10,577,85,1.1,0.8237,0.8237,0.2214,1.0,0.7308,0.8462,0.9167,0,0.2346,0.1127,6.6154
+retriever:vector,parent_child,vector,True,False,10,577,85,1.1,0.7712,0.7712,0.2349,0.9231,0.6538,0.8462,0.7083,0,0.2346,0.1457,6.6154

@@ -1,0 +1,2 @@
+config,chunker,retriever,use_vlm,use_parent,k,n_chunks,n_parents,avg_pages_per_chunk,page_recall,page_recall@10,page_precision,any_hit,full_hit,doc_hit,doc_coverage,unattributed_chunks,cov_pct_dense,cov_numeric_density,cov_unique_pages
+baseline,parent_child,hybrid,True,False,10,577,85,1.1,0.8205,0.8205,0.223,0.9615,0.6923,0.8462,0.7917,0,0.2077,0.1226,6.5385
