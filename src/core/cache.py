@@ -149,11 +149,7 @@ def make_cached_embeddings(
     if not enabled:
         return base_embeddings
     
-    try:
-        from langchain.embeddings import CacheBackedEmbeddings
-    except ImportError:
-        from langchain.storage import CacheBackedEmbeddings
-    
+    from langchain.embeddings import CacheBackedEmbeddings
     from langchain.storage import LocalFileStore
     
     cache_dir = Path(cache_dir)
