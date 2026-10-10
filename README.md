@@ -1,8 +1,8 @@
-# FinTasKit
+# FinTasKit: Multi-Modal RAG for Financial Reports
 
-A hands-on, production-grade RAG pipeline built around real financial filings (Wells Fargo, Tesla, AMD quarterly reports). Seven notebooks walk from PDF parsing through chunking, hybrid retrieval, LangGraph generation, Ragas evaluation, and FastAPI + LangSmith observability.
+A hands-on, production-grade RAG pipeline built around real financial filings (Wells Fargo, Tesla, AMD quarterly reports), specialized for dense, chart-heavy financial reports (10-K, 10-Q, pitch decks). Powered by VLM captioning, hybrid retrieval, Cross-Encoder reranking, and evaluated using Ragas metrics.
 
-This repository is an enhanced version of the financial PDF RAG system found at https://github.com/zyziyun/fin-rag-lab. It includes comprehensive performance evaluations of the system's core components and offers an optimized solution. Additionally, I have integrated the previously fragmented components into a unified, web-based platform, allowing users to upload one or more documents for analysis and Q&A.
+This repository is an enhanced version of the financial PDF RAG system found at [zyziyun's fin-rag-lab](https://github.com/zyziyun/fin-rag-lab). It includes comprehensive performance evaluations of the system's core components and offers an optimized solution. Additionally, I have integrated the previously fragmented components into a unified, web-based platform, allowing users to upload one or more documents for analysis and Q&A.
 
 [![CI](https://github.com/zyziyun/fin-rag-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/zyziyun/fin-rag-lab/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -33,6 +33,10 @@ python scripts/precompute_cache.py \
     --inputs data/uploads/wells_fargo.pdf \
              data/uploads/tesla.pdf \
              data/uploads/amd.pdf
+
+# 5. Open the first notebook
+jupyter lab notebooks/00_quickstart.ipynb
+```
 
 If you have a pre-built `cache_bundle.zip`, unzip it at the repo root instead of step 4 — the cache is content-addressed, so a teammate's bundle works on your machine bit-for-bit.
 
