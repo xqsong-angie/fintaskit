@@ -28,6 +28,7 @@ jobs:
           pip install pytest
 
       - name: Run unit tests
-        # 使用 python -m pytest 自动处理模块路径，并指定正确的单元测试目录
+        env:
+          OPENAI_API_KEY: "sk-fake-key-for-ci-testing"
         run: |
           python -m pytest tests/unit -v
