@@ -110,8 +110,9 @@ parent:expand=True（父子块扩展）的权衡：
 
 
 2.python scripts/run_component_eval.py --axes all --k 5 -o tmp_eval --markdown
+3.loader 轴：验证 VLM 能否解决图表找不到的问题：python scripts/run_component_eval.py --axes loader --persist-dir tmp_chroma_vlm
 
-
+4.generator 轴（需要API Key）：评估 LLM 输出答案并标注页码引用的准确性：python scripts/run_component_eval.py --axes generator --generator-configs gpt-4o-mini -o tmp_eval --persist-dir tmp_chroma_gen
 
    Only *distinctive* terms count (page frequency < 25%). Generic
 
