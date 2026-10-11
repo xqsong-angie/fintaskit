@@ -23,7 +23,7 @@ This repository is an enhanced version of the financial PDF RAG system found at 
 
 ### 1. Install
 ```bash
-git clone [https://github.com/your-username/fin-rag-lab.git](https://github.com/your-username/fin-rag-lab.git)
+git clone https://github.com/xqsong-angie/fintaskit
 cd fin-rag-lab
 
 pip install -r requirements.txt
