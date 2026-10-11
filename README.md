@@ -9,12 +9,23 @@ This repository is an enhanced version of the financial PDF RAG system found at 
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 
 ---
+## 🌟 Key Features
 
-## Quickstart
+- **VLM Ingestion**: Captions embedded tables, graphs, and visual charts directly during document ingestion.
+- **Hybrid Retrieval**: Combines sparse BM25 (exact keyword matching for financial numbers) with dense vector search (semantic search via ChromaDB).
+- **Two-Stage Reranking**: Uses `bge-reranker-base` to refine Top-10 retrieved chunks down to the Top-4 most relevant contexts.
+- **Ragas Benchmarked**: Measured for Faithfulness (85%+), Context Precision (53%+), and Component-Level Page Recall (82%+).
+  
+---
+
+## 🛠️ Installation & Setup
 
 
 ### 1. Install
 ```bash
+git clone [https://github.com/your-username/fin-rag-lab.git](https://github.com/your-username/fin-rag-lab.git)
+cd fin-rag-lab
+
 pip install -r requirements.txt
 ```
 ### 2. Keys
