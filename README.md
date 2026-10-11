@@ -24,15 +24,20 @@ This repository is an enhanced version of the financial PDF RAG system found at 
 ### 1. Install
 ```bash
 git clone https://github.com/xqsong-angie/fintaskit
-cd fin-rag-lab
+cd fintaskit
 
+# Install dependencies
 pip install -r requirements.txt
 ```
+
 ### 2. Keys
+
+Create a .env file in the root directory:
+
 ```bash
 cp .env.example .env
 ```
-edit .env: OPENAI_API_KEY=sk-...   (LANGSMITH_* optional, only needed for notebook 06)
+And edit .env: OPENAI_API_KEY=sk-...   (LANGSMITH_* optional, only needed for notebook 06)
 
 ### 3. PDFs — download into data/uploads/  (URLs in Footnotes below)
  wells_fargo.pdf, tesla.pdf, amd.pdf
@@ -53,7 +58,50 @@ If you have a pre-built `cache_bundle.zip`, unzip it at the repo root instead of
 
 ---
 
+## 🚀 Quickstart & Reproduction
+
+Run End-to-End Evaluation (Ragas + Reranker)  
+To reproduce our benchmark results on the 26 in-scope golden questions:
+
+```
+python -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path('.').resolve()))
+
+from src.evaluators.component_eval import load_golden, DOC_FILES
+from src.evaluators.ragas_evaluator import RagasEvaluator
+from src.api.app_factory import PipelineConfig, build_stack
+from src.retrievers.reranked import RerankedHybridRetriever
+
+# 1. Load Golden Set
+golden_rows = load_golden('data/golden_set/golden.jsonl')
+golden_dicts = [{'question': g.question, 'ground_truth': getattr(g, 'ground_truth', ''), 'category': g.category} for g in golden_rows if not g.is_ooc]
+
+# 2. Build Pipeline
+cfg = PipelineConfig(use_vlm=True, deep_k=10, quick_k=10, persist_dir='tmp_chroma_vlm_k10')
+stack = build_stack(cfg)
+
+for doc_key, pdf_path in DOC_FILES.items():
+    stack.ingest(pdf_path)
+
+# 3. Apply Reranker (Top-10 -> Top-4)
+stack.retriever = RerankedHybridRetriever(base_retriever=stack.retriever, top_n=4)
+stack.query_pipeline.retriever = stack.retriever
+
+# 4. Evaluate
+evaluator = RagasEvaluator()
+df_results = evaluator.evaluate(lambda q: stack.query(q), golden_dicts)
+
+print('\n=== RAGAS EVALUATION RESULTS ===')
+print(df_results[['faithfulness', 'answer_relevancy', 'context_precision']].mean())
+"
+```
+---
+
 ## Lab progression
+
+Note: This section is inherited from the upstream repository and provided for educational purposes only. You can safely skip it if you only want to reproduce the benchmark results.
 
 | # | Notebook | Topic |
 |---|---|---|
@@ -217,27 +265,6 @@ fin-rag-lab/
 
 ---
 
-
-
-
----
-
-## What we observed on the real PDFs
-
-| Document | Pages | Text blocks | Tables | Images | Time | Cost |
-|---|---:|---:|---:|---:|---:|---:|
-| Wells Fargo Q4 2025 | 12 | 418 | **0** | 1 | 6s | $0.0004 |
-| Tesla Q1 2026 | 31 | 530 | 11 | 10 | 95s | $0.0061 |
-| AMD Q4 2025 | 34 | 482 | 21 | 61 | 112s | $0.0187 |
-| **Total** | 77 | 1,430 | 32 | 72 | ~3.5 min | **$0.025** |
-
-Two teaching moments:
-
-1. **Wells Fargo: 0 tables detected.** PyMuPDF's `find_tables()` cannot recover tables that are laid out as positioned text without an underlying table structure — common for press-release-style PDFs. The financial data *is* there, but fragmented across 418 text blocks. This is exactly the failure mode `02_chunking.ipynb` opens with: a generic `CoverageDiagnostic` tool reveals fixed-size chunking can't retrieve the table content even when asked direct questions. We don't hard-code "WF misses tables" anywhere — the tool measures it.
-
-2. **AMD: 36 cache hits within itself** (out of 104 lookups). AMD's slide deck reuses the same logo / page-header / footer images across pages. Content-addressed caching deduplicates them automatically — proof the cache key design works without writing a test.
-
----
 
 ## Footnotes
 
