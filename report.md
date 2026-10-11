@@ -29,7 +29,6 @@ Evaluations were conducted on a curated golden dataset (`data/golden_set/golden.
 2. **Cost Efficiency**: Truncating Top-10 hits to Top-4 via Cross-Encoder cut prompt context tokens by ~60% with negligible loss in factual grounding (`faithfulness` remained above 85%).
 
 
-
 ## Details
 
 mode=raw (raw text stats, without vlm captioning, total 77 pages, 1 page empty)
@@ -107,7 +106,19 @@ parent:expand=True（父子块扩展）的权衡：
 
 页面召回率提升到了 0.7564，但精确度降到了最低的 0.1822。这证明了小块检索匹配、大块上下文展开（Parent-Child Expansion）确实能有效找回缺失页面，但需要大模型在生成阶段具备筛选长上下文的能力。
 
-
+挑出每行recall出问题的，得到
+"
+qid            category  page_recall  page_precision                               missed_pages
+q06        fact_finding     0.000000             0.0                                    amd:p22
+q15            semantic     0.333333             0.2                            amd:p24|amd:p27
+q21 single_doc_multihop     0.000000             0.0                     amd:p7|amd:p10|amd:p11
+q22           cross_doc     0.333333             0.2                           tesla:p4|amd:p10
+q23           cross_doc     0.000000             0.0          tesla:p4|tesla:p28|amd:p7|amd:p10
+q24           cross_doc     0.166667             0.2 tesla:p4|tesla:p5|tesla:p9|amd:p12|amd:p21
+原因分析：
+单图表与特殊文本布局（Parsing 阶段丢失）：VLM Captioning（--mode vlm）
+多页长上下文与分块截断：尝试 Parent-Child Chunking（父子块扩展），用较小的子块（128/256 tokens）做精准语义匹配，但在检索命中后将整个 Parent Chunk：python scripts/run_component_eval.py --axes parent --k 5 --persist-dir tmp_chroma_parent -o eval_parent --markdown
+扩大k值能否直接提升跨文档题：python scripts/run_component_eval.py --axes retriever --k 10 --persist-dir tmp_chroma_k10
 
 2.python scripts/run_component_eval.py --axes all --k 5 -o tmp_eval --markdown
 3.loader 轴：验证 VLM 能否解决图表找不到的问题：python scripts/run_component_eval.py --axes loader --persist-dir tmp_chroma_vlm
