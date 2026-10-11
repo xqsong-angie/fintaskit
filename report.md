@@ -27,3 +27,51 @@ Evaluations were conducted on a curated golden dataset (`data/golden_set/golden.
 #### Key Insights:
 1. **Precision Boost**: Incorporating `bge-reranker-base` raised `context_precision` by **+36.4% relative** (from 39.39% to 53.74%), significantly reducing context noise fed to the LLM.
 2. **Cost Efficiency**: Truncating Top-10 hits to Top-4 via Cross-Encoder cut prompt context tokens by ~60% with negligible loss in factual grounding (`faithfulness` remained above 85%).
+
+
+
+## Details
+
+mode=raw (raw text stats, without vlm captioning, total 77 pages, 1 page empty)
+  wells_fargo  12 pages   30,475 chars
+
+  tesla        31 pages   52,736 chars
+
+  amd          34 pages   37,767 chars
+
+30 golden rows, 76 pages indexed
+
+mode=vlm的情况要补充，因为有图表没有覆盖到，run ```python scripts/make_label_pack.py qa --mode vlm``` 打包模式输出相关数据 ```python scripts/make_label_pack.py pack```
+
+
+   Only *distinctive* terms count (page frequency < 25%). Generic
+
+   finance words like 'revenue' are ignored — they're everywhere.
+
+   A distinctive term that IS present means decide: still OOC?
+
+
+ OUT-OF-CORPUS SANITY — does the answer actually exist in corpus?
+Q26  What was Apple's Q4 2025 revenue?
+
+   distinctive terms: ['apple']
+
+   OK: no distinctive term found; best page amd:p33 (bm25 5.73) is an unrelated match
+
+
+
+   Q29  What did Microsoft's CEO say about AI during the earnings call?
+
+   distinctive terms: ['microsoft', 'call']
+
+   REVIEW — these distinctive terms DO appear in corpus:
+
+   'microsoft' at amd:p2
+
+   'call' at wells_fargo:p9, tesla:p8, tesla:p30, amd:p22
+
+   -> if the answer is derivable, this row is not OOC.
+
+ 
+   
+
