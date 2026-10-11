@@ -41,7 +41,76 @@ mode=raw (raw text stats, without vlm captioning, total 77 pages, 1 page empty)
 
 30 golden rows, 76 pages indexed
 
-mode=vlm的情况要补充，因为有图表没有覆盖到，run ```python scripts/make_label_pack.py qa --mode vlm``` 打包模式输出相关数据 ```python scripts/make_label_pack.py pack```
+mode=vlm的情况要补充，因为有图表没有覆盖到，run ```python scripts/make_label_pack.py qa --mode vlm``` 
+打包模式输出相关数据 ```python scripts/make_label_pack.py pack``` 生成 tmp_label_pack.md 文件
+
+
+
+example:
+
+
+
+{"id": "q07", "question": "What was AMD's full-year 2025 revenue?", "category": "fact_finding", "expected_doc": "amd", "ground_truth": "AMD's full-year 2025 revenue was $34,639 million (about $34.6 billion), up 34% from $25,785 million in 2024.", "answer_numbers": ["34,639", "34.6"], "gold_pages": [13, 17], "paraphrase": null, "ambiguous": false}
+
+### Q7  [fact_finding]
+QUESTION: What was AMD's full-year 2025 revenue?
+CURRENT ground_truth: AMD's full-year 2025 revenue was $34,639 million (about $34.6 billion), up 34% from $25,785 million in 2024.
+CURRENT numbers: ['2025', '34,639', '34.6', '34', '25,785', '2024.']
+
+--- amd page 13 (bm25 8.55) ---
+13 | | Q4 2025 FINANCIAL RESULTS – February 3, 2026
+FY 2025 Revenue
+Record full year revenue of $34.6 billion increased 34% y/y
+Revenue growth driven by growth in Data Center and Client and Gaming segments
+$25.8B
+$34.6B
+2024 2025
+--- amd page 1 (bm25 8.17) ---
+AMD Financial Results
+Fourth Quarter and Full Year 2025 February 3, 2026
+
+{"id": "q07", "question": "What was AMD's full-year 2025 revenue?", "category": "fact_finding", "expected_doc": "amd", "ground_truth": "AMD's full-year 2025 revenue was a record $34.6 billion, up 34% year-over-year from $25.8 billion in 2024.", "answer_numbers": ["34.6", "34", "25.8"], "gold_pages": [13], "paraphrase": "What was the company's full-year 2025 revenue?", "ambiguous": false}
+
+replace number format with the ones can be found in document,but you can also copy paste the chunk and problematic golden data row to LLMs (e.g., Gemini) to let them revise the data row for you. 
+
+After all problematc data are revised, run python scripts/make_label_pack.py qa again
+
+I ran two component evaluation:
+1.python scripts/run_component_eval.py --axes loader,chunker,retriever --k 5
+tmp_component_eval.summary.csv RAG 配置综合效果
+tmp_component_eval.rows.csv 每一个问题（Q0 ~ Q29）在每一种配置下的细粒度得分
+
+| config | page_recall | page_precision | any_hit | full_hit | doc_hit | doc_coverage | n_chunks | avg_pages_per_chunk | cov_pct_dense |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| baseline | 0.7154 | 0.3059 | 0.8846 | 0.5769 | 0.8462 | 0.7917 | 577 | 1.1 | 0.2 |
+| chunker:fixed_size | 0.8045 | 0.2192 | 0.9615 | 0.6923 | 0.8462 | 0.6667 | 111 | 1.74 | 0.2154 |
+| chunker:recursive | 0.5987 | 0.2583 | 0.8077 | 0.4615 | 0.8462 | 0.7917 | 1317 | 1.0 | 0.2692 |
+| retriever:bm25 | 0.6641 | 0.2504 | 0.8077 | 0.5 | 0.8462 | 0.7917 | 577 | 1.1 | 0.2077 |
+| retriever:vector | 0.6192 | 0.3378 | 0.8077 | 0.4615 | 0.8462 | 0.7083 | 577 | 1.1 | 0.2077 |
+| parent:expand=True | 0.7564 | 0.1822 | 0.8846 | 0.6538 | 0.8462 | 0.7917 | 577 | 1.1 | 0.2 | 
+
+fixed_size 取得了最高的页面召回率 (page_recall = 0.8045)，但代价是 Precision 大幅下降 (0.2192)：
+
+原因：因为固定大小分块（fixed_size）的 Chunk 比较大且固定，平均每个 Chunk 跨越了 1.74 个页面（avg_pages_per_chunk = 1.74），很容易“顺便”把相邻的页面也带进来，因此 full_hit（全命中率）高达 69.23%。但这也塞入了大量无关噪音。
+
+recursive 分块召回率最低 (0.5987)：
+
+原因：它切出了多达 1317 个碎片化小块（n_chunks = 1317），切得太细导致金融财报中的长表或完整陈述被截断，单块语义不完整，检索时很难精准召回全文上下文。
+
+Hybrid 检索（Baseline）优于单腿检索（BM25 或 Vector）：
+
+baseline (Hybrid: BM25 + Vector) 召回率是 0.7154，而单独跑 bm25 是 0.6641，单独跑 vector 是 0.6192。
+
+结论：向量检索与关键词检索结合（RRF 融合）在这个财报数据集上明显优于单维检索。
+
+parent:expand=True（父子块扩展）的权衡：
+
+页面召回率提升到了 0.7564，但精确度降到了最低的 0.1822。这证明了小块检索匹配、大块上下文展开（Parent-Child Expansion）确实能有效找回缺失页面，但需要大模型在生成阶段具备筛选长上下文的能力。
+
+
+
+2.python scripts/run_component_eval.py --axes all --k 5 -o tmp_eval --markdown
+
 
 
    Only *distinctive* terms count (page frequency < 25%). Generic
