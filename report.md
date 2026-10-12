@@ -113,3 +113,47 @@ The empirical evaluation validates that **FinTasKit** is production-ready. The c
 * **High Visual & Numerical Recall**: **82.05% Page Recall** across dense 10-K/10-Q reports.
 * **Precision & Noise Suppression**: **53.74% Context Precision** with **60% lower token cost**.
 * **Strict Grounding**: **85.45%+ Faithfulness**, ensuring reliable financial reporting.
+
+---
+
+## 6. Reproducibility & Execution Instructions
+
+To execute component-level ablations, label dataset packaging, and end-to-end Ragas evaluation benchmarks, follow the instructions below:
+
+### 6.1 Data Preparation & Label Pack QA
+Run label pack utilities to normalize numerical values and verify Out-Of-Corpus (OOC) rows:
+
+```bash
+# 1. Generate QA label pack for VLM mode inspection
+python scripts/make_label_pack.py qa --mode vlm
+
+# 2. Package revised golden dataset to Markdown
+python scripts/make_label_pack.py pack
+```
+
+### 6.2 Component-Level Ablation StudiesRun component evaluations across chunkers, retrievers, VLM loaders, and candidate depths ($k$):
+
+```bash
+# Baseline & Chunker Ablation (k=5)
+python scripts/run_component_eval.py --axes loader,chunker,retriever --k 5 -o tmp_eval --markdown
+
+# Parent-Child Expansion Benchmark
+python scripts/run_component_eval.py --axes parent --k 5 --persist-dir tmp_chroma_parent -o eval_parent --markdown
+
+# VLM Loader Evaluation (Resolves visual charts)
+python scripts/run_component_eval.py --axes loader --persist-dir tmp_chroma_vlm
+
+# Expanded Candidate Depth Benchmark (k=10)
+python scripts/run_component_eval.py --axes retriever --k 10 --persist-dir tmp_chroma_k10
+```
+
+### 6.3 End-to-End Ragas Evaluation & Reranker Ablation
+Reproduce the end-to-end Ragas benchmark results with or without Cross-Encoder reranking:
+
+```bash
+# 1. Run Baseline Ragas Evaluation (k=10, No Reranker)
+python scripts/eval_ragas.py --output eval_baseline_ragas.csv
+
+# 2. Run Optimal Ragas Evaluation (k=10 + bge-reranker-base Top-4)
+python scripts/eval_ragas.py --use-reranker --output eval_reranked_ragas.csv
+```
