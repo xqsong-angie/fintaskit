@@ -1,23 +1,5 @@
 """
-FastAPI service wrapping RAGStack.
-
-Endpoints:
-
-  POST /ingest     body: {"path": "...", "max_pages": int?, "page_range": [int,int]?}
-                   returns: {"document_id", "title", "n_chunks", "cost_usd", "duplicate"}
-  POST /query      body: {"question": "...", "document_ids": [str]?}
-                   returns: {"answer", "citations", "stages", "query_type"}
-  GET  /documents  returns: indexed documents (for a UI document picker)
-  GET  /health     returns: {"status", "n_documents_indexed", ...}
-
-Assembly lives in app_factory.RAGStack — this module is only the HTTP shell, so
-the notebooks, the Gradio UI and this API all serve the same pipeline config.
-
-Run from repo root:
-    uvicorn src.api.server:app --reload --port 8000
-
-Production hardening (auth, rate limiting, async job queue) is out of scope for
-the lab.
+FastAPI service wrapping RAGStack (Updated with VLM & Cross-Encoder Reranker).
 """
 from __future__ import annotations
 
@@ -29,15 +11,15 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.api.app_factory import PipelineConfig, RAGStack
-from src.captioners.vlm_captioner import NoOpCaptioner
+from src.captioners.vlm_captioner import NoOpCaptioner, GPT4oCaptioner
 from src.core.cache import CacheBundle
 from src.core.config import configure_langsmith, settings
 from src.observability import CostTracker
 from src.pipelines import IngestionPipeline
-
+from src.retrievers.reranked import RerankedHybridRetriever
 
 # =============================================================
-# Request / Response models
+# Request / Response models (保持原样不变)
 # =============================================================
 class IngestRequest(BaseModel):
     path: str = Field(..., description="Absolute or repo-relative path to a PDF")
@@ -93,14 +75,15 @@ class DocumentModel(BaseModel):
 
 
 # =============================================================
-# App state
+# App state & Factory
 # =============================================================
 def build_app(
     config: Optional[PipelineConfig] = None,
     cache: Optional[CacheBundle] = None,
     ingestion: Optional[IngestionPipeline] = None,
+    use_reranker: bool = True,
 ) -> FastAPI:
-    """Factory pattern — lets tests build an isolated app."""
+    """Factory pattern — lets tests or production build an isolated app."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -109,16 +92,38 @@ def build_app(
 
     app = FastAPI(
         title="Fintech RAG Lab API",
-        version="1.1.0",
-        description="RAG service over financial filings. POST /ingest, then POST /query.",
+        version="1.3.0",
+        description="RAG service over financial filings with VLM + Reranker.",
         lifespan=lifespan,
     )
 
     tracker = CostTracker()
     cache = cache or CacheBundle.from_root("cache", enabled=True)
+    
+    # 1. 默认使用最佳评估配置 (deep_k=10, persist_dir 指向已索引的 tmp_chroma_vlm_k10)
+    config = config or PipelineConfig(
+        use_vlm=True,
+        deep_k=10,
+        quick_k=10,
+        persist_dir="tmp_chroma_vlm_k10",
+        collection="api_stack",
+    )
+    
     ingestion = ingestion or IngestionPipeline(cache=cache, cost_tracker=tracker)
-    config = config or PipelineConfig(persist_dir="./chroma_api", collection="api_stack")
     stack = RAGStack(config, cache, tracker, ingestion=ingestion)
+
+    # 2. 注入 Reranker 过滤器 (Top-10 -> Top-4)
+    if use_reranker:
+        print("[API Initialization] Injecting Cross-Encoder Reranker (bge-reranker-base)...")
+        reranked_retriever = RerankedHybridRetriever(
+            base_retriever=stack.retriever,
+            top_n=4,
+            model_name="BAAI/bge-reranker-base",
+        )
+        # 同时替换 stack 和 internal query_pipeline 中的 retriever
+        stack.retriever = reranked_retriever
+        stack.query_pipeline.retriever = reranked_retriever
+
     app.state.stack = stack
 
     # ---- health ----
@@ -131,6 +136,7 @@ def build_app(
             "openai_key_set": settings.has_openai_key,
             "cost_usd": stack.tracker.total,
             "config": stack.cfg.to_dict(),
+            "reranker_enabled": use_reranker,
         }
 
     # ---- documents ----
@@ -193,5 +199,5 @@ def build_app(
     return app
 
 
-# Module-level app for `uvicorn src.api.server:app`
-app = build_app(ingestion=IngestionPipeline(captioner=NoOpCaptioner(), cache=CacheBundle.from_root("cache")))
+# Module-level default instance for uvicorn
+app = build_app(use_reranker=True)
