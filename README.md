@@ -1,3 +1,14 @@
+---
+title: FinTasKit Workbench
+emoji: 📈
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 4.19.0
+app_file: app.py
+pinned: false
+---
+
 # FinTasKit: Multi-Modal RAG for Financial Reports
 
 A hands-on, production-grade RAG pipeline built around real financial filings (Wells Fargo, Tesla, AMD quarterly reports), specialized for dense, chart-heavy financial reports (10-K, 10-Q, pitch decks). Powered by VLM captioning, hybrid retrieval, Cross-Encoder reranking, and evaluated using Ragas metrics.
