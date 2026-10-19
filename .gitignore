@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local artifacts
+chroma_db*/
+tmp_chroma_*/
+tmp_*.csv
+tmp_*.md
+*.egg-info/
+# Chroma writes a uuid dir per collection; none of it belongs in git
+chroma_ui/*/
+
+# Env / secrets
+.env
+.venv/
+
+# Cache (regeneratable; we ship cache_bundle.zip separately)
+cache/docs/
+cache/vlm/
+cache/embeddings/
+**/cache/docs/
+**/cache/vlm/
+**/cache/embeddings/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+.claude/
+chroma_ui/
+tmp_chroma_vlm_k10/
+cache/
+*.sqlite3
+cache_bundle.zip
+*.csv
+*.sqlite3
+*.zip
+cache/
+cache_bundle/
+chroma_ui/
+tmp_chroma_vlm_k10/
+cache_bundle.zip
+*.csv
+*.sqlite3
+*.zip
+cache/
+cache_bundle/
+chroma_ui/
+tmp_chroma_vlm_k10/
+**/*.sqlite3
+**/chroma_*
+**/tmp_chroma_*
+data/uploads/*.pdf
+**/cache_bundle*
+**/*.zip
+**/*.csv
+*.zip
+*.bin
+*.sqlite3
+cache_bundle.zip
+cache_bundle/
+chroma_ui/
+chroma_api/
+chroma_db_*/
+tmp_chroma_*/
